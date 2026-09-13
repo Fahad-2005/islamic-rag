@@ -1,0 +1,62 @@
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Vector Databases & Local Stores
+chroma_db/
+chroma_db_store/
+*.chroma/
+*.sqlite3
+*.db
+
+# Data & Model Weights (ignore heavy raw datasets and cached models)
+data/raw/
+*.tar.gz
+*.zip
+*.bin
+*.pt
+*.safetensors
+models/
+huggingface/
+.cache/
+
+# Node.js / Frontend (if React or Next.js is in the same repo)
+node_modules/
+.next/
+out/
+build/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs & Temporary Files
+logs/
+*.log
+tmp/
+temp/
