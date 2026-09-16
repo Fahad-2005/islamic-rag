@@ -1,64 +1,73 @@
 import os
+import pandas as pd
 import chromadb
 from chromadb.utils import embedding_functions
-import pandas as pd
 
-CSV_PATH = os.path.join("..", "data", "toyData.csv")
-CHROMA_PATH = "./chroma_store"
+# 1. Path Configuration
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(BASE_DIR, "..", "data", "binoria_300.csv")
+CHROMA_PATH = os.path.join(BASE_DIR, "chroma_store")
 
-def run_ingestion():
-    print("Reading CSV data...")
-    df = pd.read_csv(CSV_PATH, encoding="utf-8")
-    
-    # Slice first 70 rows to ensure exact toy size
-    subset = df.head(70).fillna("")
+print(f"Loading data from: {DATA_PATH}")
+df = pd.read_csv(DATA_PATH)
 
-    # Initialize Chroma persistent storage
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
+# Ensure no empty questions or answers exist
+df = df.dropna(subset=["question", "answer"])
+print(f"Total valid records to index: {len(df)}")
 
-    # Lightweight multilingual model (supports Urdu, Arabic, and English)
-    embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    )
+# 2. Embedding Model Setup
+embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+)
 
-    # Get or create collection
-    collection = client.get_or_create_collection(
-        name="binoria_toy_fatawa",
-        embedding_function=embedding_func
-    )
+# 3. Initialize Persistent Vector Client
+client = chromadb.PersistentClient(path=CHROMA_PATH)
 
-    documents = []
-    metadatas = []
-    ids = []
+# Clear existing collection to avoid duplicate vectors
+COLLECTION_NAME = "binoria_toy_fatawa"
+try:
+    client.delete_collection(name=COLLECTION_NAME)
+    print(f"Resetting existing collection: {COLLECTION_NAME}")
+except Exception:
+    pass
 
-    for idx, row in subset.iterrows():
-        question = str(row.get("question", "")).strip()
-        answer = str(row.get("answer", "")).strip()
-        category = str(row.get("category", "")).strip()
-        sub_category = str(row.get("sub_category", "")).strip()
-        fatwa_no = str(row.get("fatwa_number", "")).strip()
-        url = str(row.get("url", "")).strip()
+collection = client.create_collection(
+    name=COLLECTION_NAME,
+    embedding_function=embed_fn,
+    metadata={"hnsw:space": "cosine"}
+)
 
-        # Combine question and answer so search matches both inquiry style and ruling text
-        text_content = f"سوال: {question}\nجواب: {answer}"
+# 4. Prepare Batch Ingestion
+documents = []
+metadatas = []
+ids = []
 
-        documents.append(text_content)
-        metadatas.append({
-            "fatwa_number": fatwa_no,
-            "category": category,
-            "sub_category": sub_category,
-            "url": url,
-            "question": question
-        })
-        ids.append(f"fatwa_{fatwa_no if fatwa_no else idx}")
+for idx, row in df.iterrows():
+    fatwa_id = str(row.get("fatwa_number", idx))
+    q_text = str(row.get("question", "")).strip()
+    a_text = str(row.get("answer", "")).strip()
 
-    print(f"Embedding and storing {len(documents)} records into Chroma DB...")
+    # Formatted document chunk for semantic retrieval
+    doc_chunk = f"سوال: {q_text}\nجواب: {a_text}"
+
+    documents.append(doc_chunk)
+    metadatas.append({
+        "fatwa_number": fatwa_id,
+        "category": str(row.get("category", "عام")),
+        "sub_category": str(row.get("sub_category", "متفرق")),
+        "question": q_text[:200],  # preview
+        "url": str(row.get("url", ""))
+    })
+    ids.append(f"fatwa_{fatwa_id}_{idx}")
+
+# 5. Insert in Chunks (Recommended for batches > 100)
+BATCH_SIZE = 64
+for i in range(0, len(documents), BATCH_SIZE):
     collection.add(
-        documents=documents,
-        metadatas=metadatas,
-        ids=ids
+        documents=documents[i:i+BATCH_SIZE],
+        metadatas=metadatas[i:i+BATCH_SIZE],
+        ids=ids[i:i+BATCH_SIZE]
     )
-    print("Ingestion complete! Data is indexed in ./chroma_store")
+    print(f"Indexed batch {i // BATCH_SIZE + 1} / {(len(documents) - 1) // BATCH_SIZE + 1}")
 
-if __name__ == "__main__":
-    run_ingestion()
+print(f"\nIngestion complete! Successfully indexed {collection.count()} documents into {CHROMA_PATH}")
