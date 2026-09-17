@@ -4,3 +4,8 @@ chromadb
 onnxruntime
 pydantic
 requests
+sentence-transformers
+pandas
+beautifulsoup4
+groq
+python-dotenv
