@@ -1,7 +1,7 @@
 import os
 import re
+import requests
 import chromadb
-from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +12,6 @@ load_dotenv()
 
 app = FastAPI(title="Islamic RAG MVP API")
 
-# Enable CORS for frontend access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,29 +20,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize local ChromaDB vector store
+# API Keys
+HF_TOKEN = os.getenv("HF_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# Initialize ChromaDB without loading any heavy local models
 CHROMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_store")
 client = chromadb.PersistentClient(path=CHROMA_PATH)
+collection = client.get_collection(name="binoria_toy_fatawa")
 
-# Local SentenceTransformer embedding model (runs completely offline)
-embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-)
-
-collection = client.get_collection(
-    name="binoria_toy_fatawa", 
-    embedding_function=embedding_func
-)
-
-# Initialize Groq client
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Initialize Groq
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+HF_API_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+def get_query_embedding(text: str) -> list:
+    """Embed single query string via Hugging Face API (~50KB memory overhead)."""
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    response = requests.post(
+        HF_API_URL,
+        headers=headers,
+        json={"inputs": text, "options": {"wait_for_model": True}},
+        timeout=30
+    )
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502, 
+            detail=f"Hugging Face API error ({response.status_code}): {response.text}"
+        )
+    return response.json()
 
 class QueryRequest(BaseModel):
     query: str
 
 def is_urdu_query(text: str) -> bool:
-    """Detect if the query contains Urdu/Arabic script characters."""
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
 @app.get("/")
@@ -58,9 +68,12 @@ async def ask_question(request: QueryRequest):
 
     is_urdu = is_urdu_query(user_query)
 
-    # 1. Retrieve top records WITH distance scores
+    # 1. Fetch remote embedding
+    query_vector = get_query_embedding(user_query)
+
+    # 2. Query Chroma vector store using raw embeddings
     search_results = collection.query(
-        query_texts=[user_query],
+        query_embeddings=[query_vector],
         n_results=2,
         include=["documents", "metadatas", "distances"]
     )
@@ -69,8 +82,8 @@ async def ask_question(request: QueryRequest):
     metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
     dists = search_results["distances"][0] if search_results.get("distances") else []
 
-    # 2. Filter out irrelevant records using empirical similarity cutoff
-    DISTANCE_THRESHOLD = 0.62
+    # 3. Filter by distance threshold
+    DISTANCE_THRESHOLD = 0.72
     valid_sources = []
     filtered_snippets = []
 
@@ -91,14 +104,13 @@ async def ask_question(request: QueryRequest):
         else "The ruling is not available in the verified records."
     )
 
-    # If no records meet the strict cutoff, reject immediately
     if not filtered_snippets:
         return {
             "answer": fallback_msg,
             "sources": []
         }
 
-    # 3. Formulate strict grounding context and prompts
+    # 4. Prompt construction
     context_text = "\n\n---\n\n".join(filtered_snippets)
 
     if is_urdu:
