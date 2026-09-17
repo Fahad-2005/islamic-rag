@@ -12,7 +12,7 @@ load_dotenv()
 
 app = FastAPI(title="Islamic RAG MVP API")
 
-# Enable CORS for local frontend access
+# Enable CORS for frontend access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,20 +21,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Connect to local Chroma store
-CHROMA_PATH = "./chroma_store"
+# Initialize local ChromaDB vector store
+CHROMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_store")
 client = chromadb.PersistentClient(path=CHROMA_PATH)
+
+# Local SentenceTransformer embedding model (runs completely offline)
 embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 )
-collection = client.get_or_create_collection(
+
+collection = client.get_collection(
     name="binoria_toy_fatawa", 
     embedding_function=embedding_func
 )
 
 # Initialize Groq client
-groq_api_key = os.getenv("GROQ_API_KEY")
-groq_client = Groq(api_key=groq_api_key) if groq_api_key else None
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 class QueryRequest(BaseModel):
     query: str
@@ -42,6 +45,10 @@ class QueryRequest(BaseModel):
 def is_urdu_query(text: str) -> bool:
     """Detect if the query contains Urdu/Arabic script characters."""
     return bool(re.search(r'[\u0600-\u06FF]', text))
+
+@app.get("/")
+def health_check():
+    return {"status": "healthy", "service": "Islamic RAG API"}
 
 @app.post("/ask")
 async def ask_question(request: QueryRequest):
@@ -52,7 +59,6 @@ async def ask_question(request: QueryRequest):
     is_urdu = is_urdu_query(user_query)
 
     # 1. Retrieve top records WITH distance scores
-    # Cosine distance ranges from 0.0 (identical) to 2.0 (opposite).
     search_results = collection.query(
         query_texts=[user_query],
         n_results=2,
@@ -63,10 +69,7 @@ async def ask_question(request: QueryRequest):
     metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
     dists = search_results["distances"][0] if search_results.get("distances") else []
 
-    # 2. Filter out irrelevant records using similarity cutoff
-    # Cosine distance <= 0.72 is generally relevant for multilingual-MiniLM
-    # 2. Filter out irrelevant records using similarity cutoff
-    # 0.62 is optimal for multilingual-MiniLM on Urdu-to-Urdu legal texts
+    # 2. Filter out irrelevant records using empirical similarity cutoff
     DISTANCE_THRESHOLD = 0.62
     valid_sources = []
     filtered_snippets = []
@@ -82,7 +85,6 @@ async def ask_question(request: QueryRequest):
                 "snippet": doc[:350] + "..." if len(doc) > 350 else doc
             })
 
-    # Fallback message
     fallback_msg = (
         "مطلوبہ مسئلہ فراہم کردہ فتاویٰ کے ریکارڈ میں دستیاب نہیں ہے۔"
         if is_urdu
@@ -134,11 +136,10 @@ async def ask_question(request: QueryRequest):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.0  # Set to 0.0 for deterministic, strictly grounded output
+            temperature=0.0
         )
         generated_answer = response.choices[0].message.content.strip()
 
-        # Guard against blank LLM output or negative statements
         negative_indicators = [
             "ruling is not available",
             "not available in the verified records",
@@ -147,7 +148,6 @@ async def ask_question(request: QueryRequest):
             "معلومات دستیاب نہیں"
         ]
 
-        # If empty OR flagged as unavailable, clean out the sources and show fallback
         if not generated_answer or any(indicator in generated_answer.lower() for indicator in negative_indicators):
             return {
                 "answer": fallback_msg,
@@ -164,4 +164,5 @@ async def ask_question(request: QueryRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

@@ -18,9 +18,7 @@ venv.bak/
 *.env
 
 # Vector Databases & Local Stores
-chroma_db/
-chroma_db_store/
-*.chroma/
+
 *.sqlite3
 *.db
 

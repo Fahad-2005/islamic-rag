@@ -1,4 +1,5 @@
 import os
+import time
 import pandas as pd
 import chromadb
 from chromadb.utils import embedding_functions
@@ -15,16 +16,19 @@ df = pd.read_csv(DATA_PATH)
 df = df.dropna(subset=["question", "answer"])
 print(f"Total valid records to index: {len(df)}")
 
-# 2. Embedding Model Setup
+# 2. Local SentenceTransformer Embedding Setup
+# Produces the exact same mathematical vectors as the Hugging Face API,
+# but runs locally on your PC without network/DNS connection failures.
 embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+    model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 )
 
 # 3. Initialize Persistent Vector Client
 client = chromadb.PersistentClient(path=CHROMA_PATH)
 
-# Clear existing collection to avoid duplicate vectors
 COLLECTION_NAME = "binoria_toy_fatawa"
+
+# Clear existing collection to avoid duplicate vectors
 try:
     client.delete_collection(name=COLLECTION_NAME)
     print(f"Resetting existing collection: {COLLECTION_NAME}")
@@ -60,14 +64,21 @@ for idx, row in df.iterrows():
     })
     ids.append(f"fatwa_{fatwa_id}_{idx}")
 
-# 5. Insert in Chunks (Recommended for batches > 100)
+# 5. Insert in Chunks
 BATCH_SIZE = 64
+total_batches = (len(documents) - 1) // BATCH_SIZE + 1
+
 for i in range(0, len(documents), BATCH_SIZE):
+    batch_docs = documents[i:i+BATCH_SIZE]
+    batch_meta = metadatas[i:i+BATCH_SIZE]
+    batch_ids = ids[i:i+BATCH_SIZE]
+
     collection.add(
-        documents=documents[i:i+BATCH_SIZE],
-        metadatas=metadatas[i:i+BATCH_SIZE],
-        ids=ids[i:i+BATCH_SIZE]
+        documents=batch_docs,
+        metadatas=batch_meta,
+        ids=batch_ids
     )
-    print(f"Indexed batch {i // BATCH_SIZE + 1} / {(len(documents) - 1) // BATCH_SIZE + 1}")
+    current_batch = (i // BATCH_SIZE) + 1
+    print(f"Indexed batch {current_batch} / {total_batches}")
 
 print(f"\nIngestion complete! Successfully indexed {collection.count()} documents into {CHROMA_PATH}")
