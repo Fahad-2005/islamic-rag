@@ -18,9 +18,8 @@ venv.bak/
 *.env
 
 # Vector Databases & Local Stores
-
-*.sqlite3
-*.db
+# (Allow chroma_store files to be committed)
+!backend/chroma_store/**
 
 # Data & Model Weights (ignore heavy raw datasets and cached models)
 data/raw/

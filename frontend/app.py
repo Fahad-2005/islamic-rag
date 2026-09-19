@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 
+API_URL = "https://islamic-rag-o50w.onrender.com/ask"
 st.set_page_config(page_title="Islamic RAG MVP", layout="centered")
 st.title("Islamic Knowledge RAG Prototype")
 st.caption("Grounded QA using Jamia Binoria Fatawa Subset")
@@ -11,14 +12,15 @@ if st.button("Search & Verify", type="primary"):
     if not query.strip():
         st.warning("Please enter a question.")
     else:
-        with st.spinner("Retrieving and generating answer..."):
+        with st.spinner("Querying backend...."):
             try:
-                response = requests.post("http://127.0.0.1:8000/ask", json={"query": query}, timeout=60)
-                res = response.json()
-
+                response = requests.post(API_URL, json={"query": query}, timeout=90)
+                
+                # Check status code first before parsing JSON
                 if response.status_code != 200:
-                    st.error(f"API Error ({response.status_code}): {res.get('detail', res)}")
+                    st.error(f"Server Error {response.status_code}: {response.text}")
                 else:
+                    res = response.json()
                     st.subheader("Answer")
                     st.write(res.get("answer"))
 
@@ -31,5 +33,7 @@ if st.button("Search & Verify", type="primary"):
                             st.write(src.get("snippet"))
                             if src.get("url"):
                                 st.markdown(f"[View Original Fatwa on Binoria]({src.get('url')})")
+            except requests.exceptions.Timeout:
+                st.error("Request timed out. Render's free tier was likely waking up. Please click 'Search & Verify' once more.")
             except Exception as e:
-                st.error(f"Connection Error: {e}")
+                st.error(f"Error: {e}")

@@ -1,7 +1,6 @@
 fastapi
 uvicorn
 chromadb
-groq
-python-dotenv
+sentence-transformers
 pydantic
 requests
