@@ -1,4 +1,13 @@
 import os
+
+# Limit CPU threads and prevent multi-threading overhead to keep RAM well under 512MB
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import re
 from pathlib import Path
 import chromadb
@@ -92,6 +101,5 @@ async def ask_question(request: QueryRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # Respect Render's dynamic port assignment or fallback to 8000 for local runs
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
