@@ -1,11 +1,7 @@
 import os
-
-# Limit CPU threads and prevent multi-threading overhead to keep RAM well under 512MB
+# Force 1 thread so PyTorch stays under Render's 512MB RAM
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import re
@@ -28,18 +24,15 @@ app.add_middleware(
 
 BACKEND_DIR = Path(__file__).resolve().parent
 
-# 1. Multilingual Embedding Function
+# 1. Local Multilingual Embedding Function
 embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 )
 
-# 2. ChromaDB Setup with absolute path resolution
+# 2. ChromaDB Setup (Do NOT pass embedding_function here to avoid metadata conflict)
 CHROMA_PATH = str(BACKEND_DIR / "chroma_store")
 client = chromadb.PersistentClient(path=CHROMA_PATH)
-collection = client.get_collection(
-    name="binoria_toy_fatawa",
-    embedding_function=embed_fn
-)
+collection = client.get_collection(name="binoria_toy_fatawa")
 
 class QueryRequest(BaseModel):
     query: str
@@ -61,7 +54,7 @@ async def ask_question(request: QueryRequest):
     if not user_query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    # Query Chroma directly using local embeddings
+    # Query Chroma directly using embed_fn explicitly
     search_results = collection.query(
         query_texts=[user_query],
         n_results=2,
