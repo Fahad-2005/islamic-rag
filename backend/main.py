@@ -23,7 +23,7 @@ CHROMA_PATH = str(BACKEND_DIR / "chroma_store")
 client = chromadb.PersistentClient(path=CHROMA_PATH)
 collection = client.get_collection(name="binoria_toy_fatawa")
 
-# Multilingual ONNX Embedding Function (~160MB RAM usage, 0 external API dependencies)
+# Local ONNX Embedding Runtime (~160MB RAM usage on Render)
 embed_fn = ONNXMiniLM_L6_V2(preferred_providers=["CPUExecutionProvider"])
 
 class QueryRequest(BaseModel):
@@ -49,6 +49,7 @@ async def ask_question(request: QueryRequest):
     try:
         query_embeddings = embed_fn([user_query])
 
+        # Request top 2 candidates
         search_results = collection.query(
             query_embeddings=query_embeddings,
             n_results=2,
@@ -61,34 +62,39 @@ async def ask_question(request: QueryRequest):
     metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
     dists = search_results["distances"][0] if search_results.get("distances") else []
 
-    # Relaxed Distance Threshold for cross-lingual vector alignment
-    DIST_THRESHOLD = 0.85
+    # Threshold tuned for cross-lingual (English -> Urdu) & Urdu semantic matching
+    DIST_THRESHOLD = 0.75
+    
     fallback_msg = (
         "مطلوبہ مسئلہ فراہم کردہ فتاویٰ کے ریکارڈ میں دستیاب نہیں ہے۔"
         if is_urdu_query(user_query)
         else "The ruling is not available in the verified records."
     )
 
-    if not docs or (dists and dists[0] > DIST_THRESHOLD):
+    # Filter sources strictly based on distance threshold
+    valid_sources = []
+    if docs and dists:
+        for doc, meta, dist in zip(docs, metas, dists):
+            if dist <= DIST_THRESHOLD:
+                valid_sources.append({
+                    "fatwa_number": meta.get("fatwa_number"),
+                    "category": meta.get("category"),
+                    "sub_category": meta.get("sub_category"),
+                    "url": meta.get("url"),
+                    "distance": round(float(dist), 4),
+                    "snippet": doc
+                })
+
+    # If no documents passed the threshold, return fallback response
+    if not valid_sources:
         return {
             "answer": fallback_msg,
             "sources": []
         }
 
-    valid_sources = []
-    for doc, meta, dist in zip(docs, metas, dists):
-        if dist <= DIST_THRESHOLD:
-            valid_sources.append({
-                "fatwa_number": meta.get("fatwa_number"),
-                "category": meta.get("category"),
-                "sub_category": meta.get("sub_category"),
-                "url": meta.get("url"),
-                "distance": round(float(dist), 4),
-                "snippet": doc
-            })
-
+    # Return top valid document text as the answer, along with only valid sources (1 or 2)
     return {
-        "answer": docs[0],
+        "answer": valid_sources[0]["snippet"],
         "sources": valid_sources
     }
 
