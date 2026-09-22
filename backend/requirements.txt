@@ -1,5 +1,6 @@
 fastapi
 uvicorn
 chromadb
+onnxruntime
 pydantic
 requests

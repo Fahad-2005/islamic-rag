@@ -1,13 +1,8 @@
 import os
-# Force 1 thread so PyTorch stays under Render's 512MB RAM
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
 import re
 from pathlib import Path
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -24,14 +19,14 @@ app.add_middleware(
 
 BACKEND_DIR = Path(__file__).resolve().parent
 
-# 1. Local Multilingual Embedding Function
-embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-)
+# 1. Lightweight ONNX Embedding Function (No PyTorch, ~150MB RAM usage)
+embed_fn = ONNXMiniLM_L6_V2()
 
-# 2. ChromaDB Setup (Do NOT pass embedding_function here to avoid metadata conflict)
+# 2. ChromaDB Setup
 CHROMA_PATH = str(BACKEND_DIR / "chroma_store")
 client = chromadb.PersistentClient(path=CHROMA_PATH)
+
+# Fetch collection without passing embedding_function during initialization to avoid metadata conflicts
 collection = client.get_collection(name="binoria_toy_fatawa")
 
 class QueryRequest(BaseModel):
@@ -54,7 +49,7 @@ async def ask_question(request: QueryRequest):
     if not user_query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    # Query Chroma directly using embed_fn explicitly
+    # Pass the lightweight embed_fn at query time
     search_results = collection.query(
         query_texts=[user_query],
         n_results=2,
