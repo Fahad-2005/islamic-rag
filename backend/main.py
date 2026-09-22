@@ -19,14 +19,12 @@ app.add_middleware(
 
 BACKEND_DIR = Path(__file__).resolve().parent
 
-# 1. Lightweight ONNX Embedding Function (No PyTorch, ~150MB RAM usage)
+# 1. Lightweight ONNX Embedding Function (~150MB RAM usage)
 embed_fn = ONNXMiniLM_L6_V2()
 
 # 2. ChromaDB Setup
 CHROMA_PATH = str(BACKEND_DIR / "chroma_store")
 client = chromadb.PersistentClient(path=CHROMA_PATH)
-
-# Fetch collection without passing embedding_function during initialization to avoid metadata conflicts
 collection = client.get_collection(name="binoria_toy_fatawa")
 
 class QueryRequest(BaseModel):
@@ -49,12 +47,17 @@ async def ask_question(request: QueryRequest):
     if not user_query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    # Pass the lightweight embed_fn at query time
-    search_results = collection.query(
-        query_texts=[user_query],
-        n_results=2,
-        include=["documents", "metadatas", "distances"]
-    )
+    try:
+        # Generate query embeddings explicitly via embed_fn
+        query_embeddings = embed_fn([user_query])
+
+        search_results = collection.query(
+            query_embeddings=query_embeddings,
+            n_results=2,
+            include=["documents", "metadatas", "distances"]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chroma Search Error: {str(e)}")
 
     docs = search_results["documents"][0] if search_results.get("documents") else []
     metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
