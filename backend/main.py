@@ -49,7 +49,7 @@ async def ask_question(request: QueryRequest):
     try:
         query_embeddings = embed_fn([user_query])
 
-        # Request top 2 candidates
+        # Request top 2 candidate sources
         search_results = collection.query(
             query_embeddings=query_embeddings,
             n_results=2,
@@ -62,16 +62,17 @@ async def ask_question(request: QueryRequest):
     metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
     dists = search_results["distances"][0] if search_results.get("distances") else []
 
-    # Threshold tuned for cross-lingual (English -> Urdu) & Urdu semantic matching
-    DIST_THRESHOLD = 0.75
+   
+    is_urdu = is_urdu_query(user_query)
+    DIST_THRESHOLD = 0.65 if is_urdu else 0.78
     
     fallback_msg = (
         "مطلوبہ مسئلہ فراہم کردہ فتاویٰ کے ریکارڈ میں دستیاب نہیں ہے۔"
-        if is_urdu_query(user_query)
+        if is_urdu
         else "The ruling is not available in the verified records."
     )
 
-    # Filter sources strictly based on distance threshold
+    
     valid_sources = []
     if docs and dists:
         for doc, meta, dist in zip(docs, metas, dists):
@@ -85,7 +86,7 @@ async def ask_question(request: QueryRequest):
                     "snippet": doc
                 })
 
-    # If no documents passed the threshold, return fallback response
+    
     if not valid_sources:
         return {
             "answer": fallback_msg,

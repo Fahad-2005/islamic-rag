@@ -40,7 +40,7 @@ session.headers.update({
 
 
 def clean_text(text):
-    """Extra spaces and newlines remove karta hai."""
+    
     if not text:
         return ""
 
@@ -48,7 +48,7 @@ def clean_text(text):
 
 
 def get_page(url):
-    """Website se page download karta hai."""
+   
     try:
         print(f"GET: {url}")
 
@@ -73,7 +73,7 @@ def get_page(url):
 
 
 def get_question_links(html):
-    """Listing page se individual question URLs nikalta hai."""
+    
     soup = BeautifulSoup(html, "html.parser")
 
     links = []
@@ -96,7 +96,7 @@ def get_question_links(html):
 
 
 def get_page_numbers(html):
-    """Pagination se available page numbers nikalta hai."""
+   
     soup = BeautifulSoup(html, "html.parser")
 
     page_numbers = []
@@ -116,10 +116,7 @@ def get_page_numbers(html):
 
 
 def extract_section(heading, stop_headings=()):
-    """
-    Heading ke baad text collect karta hai
-    jab tak next section heading na aa jaye.
-    """
+   
     parts = []
 
     for element in heading.find_all_next():
@@ -150,7 +147,7 @@ def extract_section(heading, stop_headings=()):
 
 
 def find_heading(container, label):
-    """Urdu section heading find karta hai."""
+    
     for heading in container.find_all(
         ["h1", "h2", "h3", "h4", "h5", "h6"]
     ):
@@ -165,7 +162,7 @@ def find_heading(container, label):
 
 
 def extract_detail(url, html):
-    """Individual fatwa page se fields extract karta hai."""
+   
     soup = BeautifulSoup(html, "html.parser")
 
     box = soup.select_one(".sawal-jawab")
@@ -268,7 +265,7 @@ def extract_detail(url, html):
 
 
 def load_existing_records():
-    """Existing CSV records load karta hai."""
+   
     if not OUTPUT_FILE.exists():
         return []
 
@@ -297,7 +294,7 @@ def load_existing_records():
 
 
 def save_records(records):
-    """Records ko CSV mein save karta hai."""
+    
     DATA_DIR.mkdir(
         parents=True,
         exist_ok=True
@@ -326,7 +323,7 @@ def save_records(records):
 
 
 def save_urls(urls):
-    """Discovered URLs save karta hai."""
+   
     DATA_DIR.mkdir(
         parents=True,
         exist_ok=True
@@ -348,7 +345,7 @@ def save_urls(urls):
 
 
 def load_saved_urls():
-    """Previously discovered URLs load karta hai."""
+    
     if not URLS_FILE.exists():
         return []
 
