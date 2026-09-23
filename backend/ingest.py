@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import pandas as pd
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR.parent / "data"
@@ -38,10 +38,8 @@ def load_all_csvs():
 def run_ingestion():
     df = load_all_csvs()
 
-    # Multilingual embedding model supporting Urdu and English
-    embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="paraphrase-multilingual-MiniLM-L12-v2"
-    )
+    # Stable local ONNX MiniLM embedding function
+    embed_fn = ONNXMiniLM_L6_V2(preferred_providers=["CPUExecutionProvider"])
 
     client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 

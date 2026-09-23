@@ -2,7 +2,7 @@ import os
 import re
 from pathlib import Path
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -20,16 +20,11 @@ app.add_middleware(
 BACKEND_DIR = Path(__file__).resolve().parent
 CHROMA_PATH = str(BACKEND_DIR / "chroma_store")
 
-# Load Multilingual Embedding Model for precise Urdu & English Retrieval
-embed_fn = SentenceTransformerEmbeddingFunction(
-    model_name="paraphrase-multilingual-MiniLM-L12-v2"
-)
-
 client = chromadb.PersistentClient(path=CHROMA_PATH)
-collection = client.get_collection(
-    name="binoria_toy_fatawa",
-    embedding_function=embed_fn
-)
+collection = client.get_collection(name="binoria_toy_fatawa")
+
+# Local ONNX Embedding Runtime (~160MB RAM usage on Render)
+embed_fn = ONNXMiniLM_L6_V2(preferred_providers=["CPUExecutionProvider"])
 
 class QueryRequest(BaseModel):
     query: str
@@ -52,9 +47,11 @@ async def ask_question(request: QueryRequest):
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
     try:
+        query_embeddings = embed_fn([user_query])
+
         # Request top 2 candidates
         search_results = collection.query(
-            query_texts=[user_query],
+            query_embeddings=query_embeddings,
             n_results=2,
             include=["documents", "metadatas", "distances"]
         )
@@ -66,9 +63,8 @@ async def ask_question(request: QueryRequest):
     dists = search_results["distances"][0] if search_results.get("distances") else []
 
     is_urdu = is_urdu_query(user_query)
-    # Cosine distance thresholds tuned specifically for Multilingual MiniLM
-    DIST_THRESHOLD = 0.42 if is_urdu else 0.55
-
+    DIST_THRESHOLD = 0.65 if is_urdu else 0.78
+    
     fallback_msg = (
         "مطلوبہ مسئلہ فراہم کردہ فتاویٰ کے ریکارڈ میں دستیاب نہیں ہے۔"
         if is_urdu
