@@ -2,7 +2,7 @@ import os
 import re
 from pathlib import Path
 import chromadb
-from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -20,11 +20,16 @@ app.add_middleware(
 BACKEND_DIR = Path(__file__).resolve().parent
 CHROMA_PATH = str(BACKEND_DIR / "chroma_store")
 
-client = chromadb.PersistentClient(path=CHROMA_PATH)
-collection = client.get_collection(name="binoria_toy_fatawa")
+# Load Multilingual Embedding Model for precise Urdu & English Retrieval
+embed_fn = SentenceTransformerEmbeddingFunction(
+    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+)
 
-# Local ONNX Embedding Runtime (~160MB RAM usage on Render)
-embed_fn = ONNXMiniLM_L6_V2(preferred_providers=["CPUExecutionProvider"])
+client = chromadb.PersistentClient(path=CHROMA_PATH)
+collection = client.get_collection(
+    name="binoria_toy_fatawa",
+    embedding_function=embed_fn
+)
 
 class QueryRequest(BaseModel):
     query: str
@@ -47,11 +52,9 @@ async def ask_question(request: QueryRequest):
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
     try:
-        query_embeddings = embed_fn([user_query])
-
-        # Request top 2 candidate sources
+        # Request top 2 candidates
         search_results = collection.query(
-            query_embeddings=query_embeddings,
+            query_texts=[user_query],
             n_results=2,
             include=["documents", "metadatas", "distances"]
         )
@@ -62,17 +65,16 @@ async def ask_question(request: QueryRequest):
     metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
     dists = search_results["distances"][0] if search_results.get("distances") else []
 
-   
     is_urdu = is_urdu_query(user_query)
-    DIST_THRESHOLD = 0.65 if is_urdu else 0.78
-    
+    # Cosine distance thresholds tuned specifically for Multilingual MiniLM
+    DIST_THRESHOLD = 0.42 if is_urdu else 0.55
+
     fallback_msg = (
         "مطلوبہ مسئلہ فراہم کردہ فتاویٰ کے ریکارڈ میں دستیاب نہیں ہے۔"
         if is_urdu
         else "The ruling is not available in the verified records."
     )
 
-    
     valid_sources = []
     if docs and dists:
         for doc, meta, dist in zip(docs, metas, dists):
@@ -86,14 +88,12 @@ async def ask_question(request: QueryRequest):
                     "snippet": doc
                 })
 
-    
     if not valid_sources:
         return {
             "answer": fallback_msg,
             "sources": []
         }
 
-    # Return top valid document text as the answer, along with only valid sources (1 or 2)
     return {
         "answer": valid_sources[0]["snippet"],
         "sources": valid_sources

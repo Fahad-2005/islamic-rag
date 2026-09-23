@@ -38,6 +38,7 @@ def load_all_csvs():
 def run_ingestion():
     df = load_all_csvs()
 
+    # Multilingual embedding model supporting Urdu and English
     embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="paraphrase-multilingual-MiniLM-L12-v2"
     )
