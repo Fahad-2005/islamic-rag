@@ -63,7 +63,7 @@ async def ask_question(request: QueryRequest):
     dists = search_results["distances"][0] if search_results.get("distances") else []
 
     is_urdu = is_urdu_query(user_query)
-    DIST_THRESHOLD = 0.65 if is_urdu else 0.78
+    DIST_THRESHOLD = 0.65 if is_urdu else 0.82
     
     fallback_msg = (
         "مطلوبہ مسئلہ فراہم کردہ فتاویٰ کے ریکارڈ میں دستیاب نہیں ہے۔"
