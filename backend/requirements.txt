@@ -1,9 +1,11 @@
 fastapi
 uvicorn
 chromadb
-onnxruntime
+sentence-transformers
+torch
 pydantic
 requests
 pandas
 beautifulsoup4
 python-dotenv
+pysqlite3-binary

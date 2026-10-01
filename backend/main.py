@@ -1,14 +1,24 @@
 import os
 import re
 from pathlib import Path
+
+# Fix for Ubuntu SQLite version requirement in ChromaDB
+try:
+    __import__('pysqlite3')
+    import sys
+    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except ImportError:
+    pass
+
 import chromadb
-from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI(title="Islamic Fatwa Semantic Retrieval API")
 
+# Allow requests from your teammate's frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,10 +31,16 @@ BACKEND_DIR = Path(__file__).resolve().parent
 CHROMA_PATH = str(BACKEND_DIR / "chroma_store")
 
 client = chromadb.PersistentClient(path=CHROMA_PATH)
-collection = client.get_collection(name="binoria_toy_fatawa")
 
-# Local ONNX Embedding Runtime (~160MB RAM usage on Render)
-embed_fn = ONNXMiniLM_L6_V2(preferred_providers=["CPUExecutionProvider"])
+# Best model for Urdu/Arabic/English cross-lingual semantic search
+embed_fn = SentenceTransformerEmbeddingFunction(
+    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+)
+
+collection = client.get_collection(
+    name="binoria_toy_fatawa",
+    embedding_function=embed_fn
+)
 
 class QueryRequest(BaseModel):
     query: str
@@ -47,11 +63,8 @@ async def ask_question(request: QueryRequest):
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
     try:
-        query_embeddings = embed_fn([user_query])
-
-        # Request top 2 candidates
         search_results = collection.query(
-            query_embeddings=query_embeddings,
+            query_texts=[user_query],
             n_results=2,
             include=["documents", "metadatas", "distances"]
         )
@@ -64,7 +77,7 @@ async def ask_question(request: QueryRequest):
 
     is_urdu = is_urdu_query(user_query)
     DIST_THRESHOLD = 0.65 if is_urdu else 0.82
-    
+
     fallback_msg = (
         "مطلوبہ مسئلہ فراہم کردہ فتاویٰ کے ریکارڈ میں دستیاب نہیں ہے۔"
         if is_urdu
@@ -72,17 +85,21 @@ async def ask_question(request: QueryRequest):
     )
 
     valid_sources = []
-    if docs and dists:
+    if docs and dists and metas:
         for doc, meta, dist in zip(docs, metas, dists):
+            # Only include sources that satisfy similarity distance threshold
             if dist <= DIST_THRESHOLD:
-                valid_sources.append({
-                    "fatwa_number": meta.get("fatwa_number"),
+                reference_data = {
+                    "fatwa_number": meta.get("fatwa_number") or meta.get("id"),
+                    "title": meta.get("title") or meta.get("question"),
                     "category": meta.get("category"),
                     "sub_category": meta.get("sub_category"),
                     "url": meta.get("url"),
                     "distance": round(float(dist), 4),
                     "snippet": doc
-                })
+                }
+                cleaned_reference = {k: v for k, v in reference_data.items() if v is not None}
+                valid_sources.append(cleaned_reference)
 
     if not valid_sources:
         return {
