@@ -18,7 +18,6 @@ from pydantic import BaseModel
 
 app = FastAPI(title="Islamic Fatwa Semantic Retrieval API")
 
-# Allow requests from your teammate's frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,15 +31,13 @@ CHROMA_PATH = str(BACKEND_DIR / "chroma_store")
 
 client = chromadb.PersistentClient(path=CHROMA_PATH)
 
-# Best model for Urdu/Arabic/English cross-lingual semantic search
+# Load multilingual sentence transformer model
 embed_fn = SentenceTransformerEmbeddingFunction(
     model_name="paraphrase-multilingual-MiniLM-L12-v2"
 )
 
-collection = client.get_collection(
-    name="binoria_toy_fatawa",
-    embedding_function=embed_fn
-)
+# Fetch existing collection without passing embedding_function in get_collection call
+collection = client.get_collection(name="binoria_toy_fatawa")
 
 class QueryRequest(BaseModel):
     query: str
@@ -63,8 +60,11 @@ async def ask_question(request: QueryRequest):
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
     try:
+        # Generate embeddings directly using sentence-transformer
+        query_embeddings = embed_fn([user_query])
+
         search_results = collection.query(
-            query_texts=[user_query],
+            query_embeddings=query_embeddings,
             n_results=2,
             include=["documents", "metadatas", "distances"]
         )
@@ -87,7 +87,6 @@ async def ask_question(request: QueryRequest):
     valid_sources = []
     if docs and dists and metas:
         for doc, meta, dist in zip(docs, metas, dists):
-            # Only include sources that satisfy similarity distance threshold
             if dist <= DIST_THRESHOLD:
                 reference_data = {
                     "fatwa_number": meta.get("fatwa_number") or meta.get("id"),
