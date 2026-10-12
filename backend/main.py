@@ -4,8 +4,8 @@ from pathlib import Path
 
 # Fix for Ubuntu SQLite version requirement in ChromaDB
 try:
-    __import__('pysqlite3')
     import sys
+    __import__('pysqlite3')
     sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 except ImportError:
     pass
@@ -44,6 +44,38 @@ class QueryRequest(BaseModel):
 
 def is_urdu_query(text: str) -> bool:
     return bool(re.search(r'[\u0600-\u06FF]', text))
+
+def extract_clean_answer(raw_text: str) -> str:
+    """
+    Cleans raw fatwa snippet for primary display by stripping repetitive 
+    headers ('سوال:' / 'جواب:') and keeping the main direct ruling.
+    """
+    cleaned = raw_text.strip()
+    
+    # 1. Strip repetitive question block if embedded in text
+    if "جواب:" in cleaned:
+        cleaned = cleaned.split("جواب:", 1)[-1].strip()
+    elif "سوال:" in cleaned and "جواب" in cleaned:
+        cleaned = cleaned.split("جواب", 1)[-1].strip()
+
+    # Remove any leading colon or spaces leftover from 'جواب:'
+    cleaned = re.sub(r'^[:\s]+', '', cleaned)
+
+    # 2. Extract first 2 paragraphs for a clean direct summary
+    paragraphs = [p.strip() for p in cleaned.split("\n") if p.strip()]
+    
+    # Separate core answer from long citation blocks
+    summary_paragraphs = []
+    for p in paragraphs:
+        if any(marker in p for marker in ["فتاویٰ", "کتاب الوقف", "رد المحتار", "البحر الرائق"]):
+            break
+        summary_paragraphs.append(p)
+        
+    if summary_paragraphs:
+        return "\n\n".join(summary_paragraphs[:2])
+    
+    # Fallback to first paragraph if everything was filtered
+    return paragraphs[0] if paragraphs else raw_text
 
 @app.get("/")
 def health_check():
@@ -106,8 +138,11 @@ async def ask_question(request: QueryRequest):
             "sources": []
         }
 
+    # Extract clean short answer for top display while leaving raw snippet intact in sources
+    primary_clean_answer = extract_clean_answer(valid_sources[0]["snippet"])
+
     return {
-        "answer": valid_sources[0]["snippet"],
+        "answer": primary_clean_answer,
         "sources": valid_sources
     }
 
