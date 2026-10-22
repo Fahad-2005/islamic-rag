@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Islamic Fatwa Semantic Retrieval API")
+app = FastAPI(title="Islamic RAG Retrieval API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,8 +36,9 @@ embed_fn = SentenceTransformerEmbeddingFunction(
     model_name="paraphrase-multilingual-MiniLM-L12-v2"
 )
 
-# Fetch existing collection without passing embedding_function in get_collection call
-collection = client.get_collection(name="binoria_toy_fatawa")
+# Fetch existing collections
+fatwa_collection = client.get_collection(name="binoria_toy_fatawa")
+sunnah_collection = client.get_collection(name="sunnah_book")
 
 class QueryRequest(BaseModel):
     query: str
@@ -64,7 +65,6 @@ def extract_clean_answer(raw_text: str) -> str:
     # 2. Extract first 2 paragraphs for a clean direct summary
     paragraphs = [p.strip() for p in cleaned.split("\n") if p.strip()]
     
-    # Separate core answer from long citation blocks
     summary_paragraphs = []
     for p in paragraphs:
         if any(marker in p for marker in ["فتاویٰ", "کتاب الوقف", "رد المحتار", "البحر الرائق"]):
@@ -74,34 +74,36 @@ def extract_clean_answer(raw_text: str) -> str:
     if summary_paragraphs:
         return "\n\n".join(summary_paragraphs[:2])
     
-    # Fallback to first paragraph if everything was filtered
     return paragraphs[0] if paragraphs else raw_text
 
 @app.get("/")
 def health_check():
     return {
         "status": "healthy",
-        "service": "Islamic Fatwa Semantic Retrieval API",
-        "collection_count": collection.count()
+        "service": "Islamic RAG Retrieval API",
+        "fatwa_collection_count": fatwa_collection.count(),
+        "sunnah_collection_count": sunnah_collection.count()
     }
 
-@app.post("/ask")
-async def ask_question(request: QueryRequest):
+# ----------------------------------------------------
+# 1. Fatwa Retrieval Endpoint
+# ----------------------------------------------------
+@app.post("/ask/fatwa")
+@app.post("/ask")  # Fallback for backward compatibility
+async def ask_fatwa(request: QueryRequest):
     user_query = request.query.strip()
     if not user_query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
     try:
-        # Generate embeddings directly using sentence-transformer
         query_embeddings = embed_fn([user_query])
-
-        search_results = collection.query(
+        search_results = fatwa_collection.query(
             query_embeddings=query_embeddings,
             n_results=2,
             include=["documents", "metadatas", "distances"]
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Fatwa Search Error: {str(e)}")
 
     docs = search_results["documents"][0] if search_results.get("documents") else []
     metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
@@ -138,11 +140,66 @@ async def ask_question(request: QueryRequest):
             "sources": []
         }
 
-    # Extract clean short answer for top display while leaving raw snippet intact in sources
     primary_clean_answer = extract_clean_answer(valid_sources[0]["snippet"])
 
     return {
         "answer": primary_clean_answer,
+        "sources": valid_sources
+    }
+
+# ----------------------------------------------------
+# 2. Sunnah Retrieval Endpoint
+# ----------------------------------------------------
+@app.post("/ask/sunnah")
+async def ask_sunnah(request: QueryRequest):
+    user_query = request.query.strip()
+    if not user_query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+
+    try:
+        query_embeddings = embed_fn([user_query])
+        search_results = sunnah_collection.query(
+            query_embeddings=query_embeddings,
+            n_results=3,
+            include=["documents", "metadatas", "distances"]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sunnah Search Error: {str(e)}")
+
+    docs = search_results["documents"][0] if search_results.get("documents") else []
+    metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
+    dists = search_results["distances"][0] if search_results.get("distances") else []
+
+    is_urdu = is_urdu_query(user_query)
+    DIST_THRESHOLD = 0.75 if is_urdu else 0.85
+
+    fallback_msg = (
+        "مطلوبہ سنت یا دعاؤں کا مضمون اس کتاب میں نہیں ملا۔"
+        if is_urdu
+        else "The queried Sunnah or Dua was not found in the record."
+    )
+
+    valid_sources = []
+    if docs and dists and metas:
+        for doc, meta, dist in zip(docs, metas, dists):
+            if dist <= DIST_THRESHOLD:
+                reference_data = {
+                    "section": meta.get("section", "عام"),
+                    "book_title": meta.get("book_title", "پیارے نبی ﷺ کی پیاری سنتیں"),
+                    "source": meta.get("source"),
+                    "distance": round(float(dist), 4),
+                    "snippet": doc
+                }
+                valid_sources.append(reference_data)
+
+    if not valid_sources:
+        return {
+            "answer": fallback_msg,
+            "sources": []
+        }
+
+    return {
+        "answer": valid_sources[0]["snippet"],
         "sources": valid_sources
     }
 
