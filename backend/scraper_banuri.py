@@ -165,7 +165,7 @@ def extract_detail(url, html):
    
     soup = BeautifulSoup(html, "html.parser")
 
-    box = soup.select_one(".sawal-jawab")
+    box = soup.select_one(".sawal-jawab, .fq")
 
     if not box:
         print("WARNING: .sawal-jawab not found")
@@ -224,9 +224,14 @@ def extract_detail(url, html):
     # Categories
     categories = []
 
-    for tag in box.select(".tag a"):
+    category_links = box.select(".tag a, .fq-cats a")
+
+    for tag in category_links:
+        category_text = tag.select_one("span")
         text = clean_text(
-            tag.get_text(" ", strip=True)
+            category_text.get_text(" ", strip=True)
+            if category_text
+            else tag.get_text(" ", strip=True)
         )
 
         if text and text not in categories:
