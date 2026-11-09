@@ -14,7 +14,7 @@ def load_all_csvs():
     csv_files = list(DATA_DIR.glob("*.csv"))
     if not csv_files:
         raise FileNotFoundError(f"No CSV files found in {DATA_DIR}")
-
+  
     dfs = []
     for file_path in csv_files:
         print(f"Loading dataset: {file_path.name}")

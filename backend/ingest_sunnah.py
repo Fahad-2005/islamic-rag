@@ -4,7 +4,6 @@ import docx
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-# Setup paths
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR.parent / "data"
 CHROMA_PATH = BASE_DIR / "chroma_store"
@@ -19,17 +18,15 @@ def run_sunnah_ingestion():
     print(f"Loading document: {DOCX_FILE.name}")
     doc = docx.Document(DOCX_FILE)
 
-    # Use the exact same embedding model as your fatwa collection
     embed_fn = SentenceTransformerEmbeddingFunction(
         model_name="paraphrase-multilingual-MiniLM-L12-v2"
     )
-
     client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 
-    # Safely create or recreate the sunnah_book collection
+    # Clear old fragmented data
     try:
-        print(f"Resetting collection: {COLLECTION_NAME}")
         client.delete_collection(name=COLLECTION_NAME)
+        print("Cleared old fragmented collection.")
     except Exception:
         pass
 
@@ -42,43 +39,59 @@ def run_sunnah_ingestion():
     documents = []
     metadatas = []
     ids = []
-
-    current_section = "General"
+    
+    current_section = "مقدمہ (Introduction)"
+    section_content = []
     count = 0
 
-    print("Parsing paragraphs and headers...")
+    # Words to ignore so we don't index introductory pages/author titles
+    ignore_list = ["خلیفہ", "دامت برکاتہم", "قارئین", "ہدایت و ارشاد"]
+
     for para in doc.paragraphs:
         text = para.text.strip()
-        if not text:
+        if not text or any(ignored in text for ignored in ignore_list):
             continue
 
-        # Detect section headings
-        if len(text) < 60 and not text.startswith("1") and not text.startswith("|") and not text.startswith("("):
+        # Detect headers (short lines without full stops or brackets)
+        is_heading = len(text) < 65 and not text.endswith("۔") and not text.startswith("(")
+
+        if is_heading:
+            if section_content:
+                count += 1
+                # Join paragraphs with double line breaks for readability
+                documents.append("\n\n".join(section_content))
+                metadatas.append({
+                    "section": current_section,
+                    "book_title": "Pyarey Nabi ki Pyari Sunnatein"
+                })
+                ids.append(f"sunnah_grouped_{count}")
+            
             current_section = text
-            continue
+            section_content = []
+        else:
+            section_content.append(text)
 
+    # Save final section
+    if section_content:
         count += 1
-        documents.append(text)
+        documents.append("\n\n".join(section_content))
         metadatas.append({
             "section": current_section,
-            "book_title": "Pyarey Nabi ki Pyari Sunnatein",
-            "source": "Khanqah Imdadia Ashrafia"
+            "book_title": "Pyarey Nabi ki Pyari Sunnatein"
         })
-        ids.append(f"sunnah_{count}")
+        ids.append(f"sunnah_grouped_{count}")
 
-    print(f"Total extracted Sunnah records to index: {len(documents)}")
+    print(f"Grouped {len(documents)} complete sections.")
 
-    # Batch indexing into ChromaDB
-    total_batches = (len(documents) + BATCH_SIZE - 1) // BATCH_SIZE
+    # Batch insert into ChromaDB
     for start in range(0, len(documents), BATCH_SIZE):
         collection.add(
             documents=documents[start:start + BATCH_SIZE],
             metadatas=metadatas[start:start + BATCH_SIZE],
             ids=ids[start:start + BATCH_SIZE],
         )
-        print(f"Indexed batch {start // BATCH_SIZE + 1} / {total_batches}")
 
-    print(f" Success! Ingested {collection.count()} items into '{COLLECTION_NAME}' inside {CHROMA_PATH}")
+    print(f"✅ Success! Ingested into '{COLLECTION_NAME}'")
 
 if __name__ == "__main__":
     run_sunnah_ingestion()
