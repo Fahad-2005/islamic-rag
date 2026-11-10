@@ -37,8 +37,14 @@ embed_fn = SentenceTransformerEmbeddingFunction(
 )
 
 # Fetch existing collections
-fatwa_collection = client.get_collection(name="binoria_toy_fatawa")
-sunnah_collection = client.get_collection(name="sunnah_book")
+fatwa_collection = client.get_or_create_collection(
+    name="binoria_toy_fatawa", 
+    embedding_function=embed_fn
+)
+sunnah_collection = client.get_or_create_collection(
+    name="sunnah_book", 
+    embedding_function=embed_fn
+)
 
 class QueryRequest(BaseModel):
     query: str
@@ -148,59 +154,114 @@ async def ask_fatwa(request: QueryRequest):
     }
 
 # ----------------------------------------------------
-# 2. Sunnah Retrieval Endpoint
+# 2. Sunnah Retrieval Endpoint (Clean Single Source Mode)
 # ----------------------------------------------------
 @app.post("/ask/sunnah")
 async def ask_sunnah(request: QueryRequest):
-    user_query = request.query.strip()
+    user_query = request.query.strip().lower()
     if not user_query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    try:
-        query_embeddings = embed_fn([user_query])
-        search_results = sunnah_collection.query(
-            query_embeddings=query_embeddings,
-            n_results=3,
-            include=["documents", "metadatas", "distances"]
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Sunnah Search Error: {str(e)}")
+    # Keyword to Exact Section Mapping
+    target_section = None
+    target_section = None
+    if any(k in user_query for k in ["پانی", "پینے", "پینے کا"]):
+        target_section = "پانی پینے کی سنتیں"
+    elif any(k in user_query for k in ["کھانا", "کھانے", "دسترخوان"]):
+        target_section = "کھانے کی چند سنتیں"
+    elif any(k in user_query for k in ["غسل", "نہانا"]):
+        target_section = "غسل کرنے کا مسنون طریقہ"
+    elif any(k in user_query for k in ["وضو", "وضو کی"]):
+        target_section = "وضو کی سنتیں"
+    elif any(k in user_query for k in ["سونا", "سونے", "بستر"]):
+        target_section = "سونے کی سنتیں"
+    elif any(k in user_query for k in ["رکوع", "رکوع میں"]):
+        target_section = "رکوع کی آٹھ سنتیں"
+    elif any(k in user_query for k in ["سجدہ", "سجدے", "سجدہ کی"]):
+        target_section = "سجدہ کی بارہ سنتیں"
+    elif any(k in user_query for k in ["قیام", "قیام میں"]):
+        target_section = "قیام میں گیارہ (۱۱) سنتیں"
+    elif any(k in user_query for k in ["قراءت", "قرأت"]):
+        target_section = "قراءت کی سات سنتیں"
+    elif any(k in user_query for k in ["قعدہ", "بیٹھنے"]):
+        target_section = "قعدہ کی تیرہ سنتیں"
+    elif any(k in user_query for k in ["اذان", "اقامت"]):
+        target_section = "اذان و اقامت کی سنتیں"
+    elif any(k in user_query for k in ["نماز کی سنتیں", "نماز کی"]):
+        target_section = "نماز کی (۵۱) سنتیں"
+    elif any(k in user_query for k in ["گھر میں داخل", "گھر سے نکل", "گھر"]):
+        target_section = "گھر میں داخل ہونے کی دعا"
+    elif any(k in user_query for k in ["مسجد", "مسجد میں"]):
+        target_section = "مسجد میں داخل ہونے کی سنتیں"
+    elif any(k in user_query for k in ["سفر", "مسافر"]):
+        target_section = "سفر کی سنتیں"
+    elif any(k in user_query for k in ["جمعہ", "جمعہ کے دن"]):
+        target_section = "جمعہ کی سنتیں"
+    elif any(k in user_query for k in ["لباس", "پہننے", "کپڑے"]):
+        target_section = "لباس کی سنتیں"
+    elif any(k in user_query for k in ["مسواک", "دانت"]):
+        target_section = "مسواک کی سنتیں"
+    elif any(k in user_query for k in ["استخارہ"]):
+        target_section = "صلوٰۃ استخارہ"
+    elif any(k in user_query for k in ["حاجت"]):
+        target_section = "صلوٰۃ حاجت"
 
-    docs = search_results["documents"][0] if search_results.get("documents") else []
-    metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
-    dists = search_results["distances"][0] if search_results.get("distances") else []
-
-    is_urdu = is_urdu_query(user_query)
-    DIST_THRESHOLD = 0.75 if is_urdu else 0.85
-
-    fallback_msg = (
-        "مطلوبہ سنت یا دعاؤں کا مضمون اس کتاب میں نہیں ملا۔"
-        if is_urdu
-        else "The queried Sunnah or Dua was not found in the record."
-    )
-
+    primary_snippet = ""
     valid_sources = []
-    if docs and dists and metas:
-        for doc, meta, dist in zip(docs, metas, dists):
-            if dist <= DIST_THRESHOLD:
-                reference_data = {
-                    "section": meta.get("section", "عام"),
-                    "book_title": meta.get("book_title", "پیارے نبی ﷺ کی پیاری سنتیں"),
-                    "source": meta.get("source"),
-                    "distance": round(float(dist), 4),
-                    "snippet": doc
-                }
-                valid_sources.append(reference_data)
+
+    # 1. Fetch exact section match via keyword intent
+    if target_section:
+        try:
+            exact_res = sunnah_collection.get(
+                where={"section": target_section},
+                include=["documents", "metadatas"]
+            )
+            if exact_res and exact_res.get("documents"):
+                primary_snippet = exact_res["documents"][0]
+                valid_sources.append({
+                    "section": target_section,
+                    "book_title": "پیارے نبی ﷺ کی پیاری سنتیں",
+                    "source": None,
+                    "distance": 0.0000,
+                    "snippet": primary_snippet
+                })
+        except Exception:
+            pass
+
+    # 2. Fallback to vector search if no keyword match was caught
+    if not valid_sources:
+        try:
+            query_embeddings = embed_fn([user_query])
+            search_results = sunnah_collection.query(
+                query_embeddings=query_embeddings,
+                n_results=1,  # Only fetch the top 1 exact match
+                include=["documents", "metadatas", "distances"]
+            )
+            docs = search_results["documents"][0] if search_results.get("documents") else []
+            metas = search_results["metadatas"][0] if search_results.get("metadatas") else []
+            dists = search_results["distances"][0] if search_results.get("distances") else []
+
+            if docs:
+                primary_snippet = docs[0]
+                valid_sources.append({
+                    "section": metas[0].get("section", "عام"),
+                    "book_title": metas[0].get("book_title", "پیارے نبی ﷺ کی پیاری سنتیں"),
+                    "source": metas[0].get("source"),
+                    "distance": round(float(dists[0]), 4),
+                    "snippet": docs[0]
+                })
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Sunnah Search Error: {str(e)}")
 
     if not valid_sources:
         return {
-            "answer": fallback_msg,
+            "answer": "مطلوبہ سنت یا دعاؤں کا مضمون اس کتاب میں نہیں ملا۔",
             "sources": []
         }
 
     return {
-        "answer": valid_sources[0]["snippet"],
-        "sources": valid_sources
+        "answer": primary_snippet,
+        "sources": valid_sources  # Will contain strictly 1 exact source card
     }
 
 if __name__ == "__main__":
