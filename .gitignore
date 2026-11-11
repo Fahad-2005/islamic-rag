@@ -56,4 +56,4 @@ Thumbs.db
 logs/
 *.log
 tmp/
-temp/
+temp/backend/chroma_store/

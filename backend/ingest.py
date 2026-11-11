@@ -65,11 +65,15 @@ def run_ingestion():
         fatwa_id = str(row.get("fatwa_number", index)).strip()
         question = str(row["question"]).strip()
         answer = str(row["answer"]).strip()
+        category = str(row.get("category", "عام")).strip()
 
-        documents.append(f"سوال: {question}\nجواب: {answer}")
+        # Structured document format to give strong semantic signals to MiniLM
+        doc_text = f"زمرہ: {category}\nسوال: {question}\nجواب: {answer}"
+
+        documents.append(doc_text)
         metadatas.append({
             "fatwa_number": fatwa_id,
-            "category": str(row.get("category", "عام")),
+            "category": category,
             "sub_category": str(row.get("sub_category", "متفرق")),
             "question": question[:200],
             "url": str(row.get("url", "")),

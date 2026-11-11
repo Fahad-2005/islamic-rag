@@ -91,6 +91,8 @@ def health_check():
         "sunnah_collection_count": sunnah_collection.count()
     }
 
+
+
 # ----------------------------------------------------
 # 1. Fatwa Retrieval Endpoint
 # ----------------------------------------------------
@@ -105,7 +107,7 @@ async def ask_fatwa(request: QueryRequest):
         query_embeddings = embed_fn([user_query])
         search_results = fatwa_collection.query(
             query_embeddings=query_embeddings,
-            n_results=2,
+            n_results=1,  # STRICTLY 1 to eliminate the wrong second reference
             include=["documents", "metadatas", "distances"]
         )
     except Exception as e:
@@ -116,7 +118,9 @@ async def ask_fatwa(request: QueryRequest):
     dists = search_results["distances"][0] if search_results.get("distances") else []
 
     is_urdu = is_urdu_query(user_query)
-    DIST_THRESHOLD = 0.65 if is_urdu else 0.82
+    
+    # Define threshold FIRST before checking distance
+    DIST_THRESHOLD = 0.45 if is_urdu else 0.70  
 
     fallback_msg = (
         "مطلوبہ مسئلہ فراہم کردہ فتاویٰ کے ریکارڈ میں دستیاب نہیں ہے۔"
@@ -126,19 +130,24 @@ async def ask_fatwa(request: QueryRequest):
 
     valid_sources = []
     if docs and dists and metas:
-        for doc, meta, dist in zip(docs, metas, dists):
-            if dist <= DIST_THRESHOLD:
-                reference_data = {
-                    "fatwa_number": meta.get("fatwa_number") or meta.get("id"),
-                    "title": meta.get("title") or meta.get("question"),
-                    "category": meta.get("category"),
-                    "sub_category": meta.get("sub_category"),
-                    "url": meta.get("url"),
-                    "distance": round(float(dist), 4),
-                    "snippet": doc
-                }
-                cleaned_reference = {k: v for k, v in reference_data.items() if v is not None}
-                valid_sources.append(cleaned_reference)
+        doc = docs[0]
+        meta = metas[0]
+        dist = dists[0]
+
+        if dist <= DIST_THRESHOLD:
+            retrieved_question = meta.get("question", "")
+            
+            reference_data = {
+                "fatwa_number": meta.get("fatwa_number") or meta.get("id"),
+                "title": retrieved_question,
+                "category": meta.get("category"),
+                "sub_category": meta.get("sub_category"),
+                "url": meta.get("url"),
+                "distance": round(float(dist), 4),
+                "snippet": doc
+            }
+            cleaned_reference = {k: v for k, v in reference_data.items() if v is not None}
+            valid_sources.append(cleaned_reference)
 
     if not valid_sources:
         return {
@@ -162,8 +171,8 @@ async def ask_sunnah(request: QueryRequest):
     if not user_query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    # Keyword to Exact Section Mapping
-    target_section = None
+    user_query_lower = user_query.lower()
+   # Keyword to Exact Section Mapping
     target_section = None
     if any(k in user_query for k in ["پانی", "پینے", "پینے کا"]):
         target_section = "پانی پینے کی سنتیں"
@@ -173,8 +182,10 @@ async def ask_sunnah(request: QueryRequest):
         target_section = "غسل کرنے کا مسنون طریقہ"
     elif any(k in user_query for k in ["وضو", "وضو کی"]):
         target_section = "وضو کی سنتیں"
-    elif any(k in user_query for k in ["سونا", "سونے", "بستر"]):
+    elif any(k in user_query for k in ["سونا", "سونے", "بستر", "سونے کی"]):
         target_section = "سونے کی سنتیں"
+    elif any(k in user_query for k in ["فرائض نماز", "نماز کے فرائض", "نماز کا طریقہ", "نماز کیسے پڑھیں", "نماز"]):
+        target_section = "فرائض نماز"
     elif any(k in user_query for k in ["رکوع", "رکوع میں"]):
         target_section = "رکوع کی آٹھ سنتیں"
     elif any(k in user_query for k in ["سجدہ", "سجدے", "سجدہ کی"]):
@@ -201,10 +212,56 @@ async def ask_sunnah(request: QueryRequest):
         target_section = "لباس کی سنتیں"
     elif any(k in user_query for k in ["مسواک", "دانت"]):
         target_section = "مسواک کی سنتیں"
+    elif any(k in user_query for k in ["بیماری", "علاج", "عیادت", "بیمار"]):
+        target_section = "بیماری، علاج اور عیادت کی سنتیں"
+    elif any(k in user_query for k in ["نکاح", "شادی", "منگنی"]):
+        target_section = "نکاح کی سنتیں"
+    elif any(k in user_query for k in ["ولیمہ", "ولیمے"]):
+        target_section = "ولیمہ"
+    elif any(k in user_query for k in ["بچہ", "ولادت", "عقیقہ", "نام رکھنا"]):
+        target_section = "بچہ ہونے کے وقت کی سنتیں"
+    elif any(k in user_query for k in ["موت", "ج جنازہ", "دفن", "میت"]):
+        target_section = "موت اور اس کے بعد کی سنتیں"
+    elif any(k in user_query for k in ["معاشرت", "سلام", "آپس میں"]):
+        target_section = "معاشرت کی چند سنتیں"
+    elif any(k in user_query for k in ["وساوس", "وسوسہ", "دل میں خیال"]):
+        target_section = "وساوس کے وقت کی سنت"
     elif any(k in user_query for k in ["استخارہ"]):
         target_section = "صلوٰۃ استخارہ"
     elif any(k in user_query for k in ["حاجت"]):
         target_section = "صلوٰۃ حاجت"
+
+    # --- English Keyword / Intent Mapping ---
+    elif any(k in user_query_lower for k in ["water", "drink", "drinking"]):
+        target_section = "پانی پینے کی سنتیں"
+    elif any(k in user_query_lower for k in ["eat", "food", "dining", "meal"]):
+        target_section = "کھانے کی چند سنتیں"
+    elif any(k in user_query_lower for k in ["bath", "shower", "ghusl"]):
+        target_section = "غسل کرنے کا مسنون طریقہ"
+    elif any(k in user_query_lower for k in ["wudu", "ablution"]):
+        target_section = "وضو کی سنتیں"
+    elif any(k in user_query_lower for k in ["sleep", "bed", "sleeping", "night"]):
+        target_section = "سونے کی سنتیں"
+    elif any(k in user_query_lower for k in ["namaz", "prayer", "salah", "faraiz", "obligatory"]):
+        target_section = "فرائض نماز"
+    elif any(k in user_query_lower for k in ["ruku", "bowing"]):
+        target_section = "رکوع کی آٹھ سنتیں"
+    elif any(k in user_query_lower for k in ["sujood", "sajdah", "prostration"]):
+        target_section = "سجدہ کی بارہ سنتیں"
+    elif any(k in user_query_lower for k in ["miswak", "teeth", "tooth"]):
+        target_section = "مسواک کی سنتیں"
+    elif any(k in user_query_lower for k in ["marriage", "nikah", "wedding"]):
+        target_section = "نکاح کی سنتیں"
+    elif any(k in user_query_lower for k in ["valimah", "reception"]):
+        target_section = "ولیمہ"
+    elif any(k in user_query_lower for k in ["sick", "illness", "disease", "hospital", "visiting"]):
+        target_section = "بیماری، علاج اور عیادت کی سنتیں"
+    elif any(k in user_query_lower for k in ["travel", "journey", "trip"]):
+        target_section = "سفر کی سنتیں"
+    elif any(k in user_query_lower for k in ["friday", "jummah"]):
+        target_section = "جمعہ کی سنتیں"
+    elif any(k in user_query_lower for k in ["clothes", "dress", "clothing", "wear"]):
+        target_section = "لباس کی سنتیں"
 
     primary_snippet = ""
     valid_sources = []

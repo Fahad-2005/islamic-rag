@@ -27,11 +27,9 @@ def run_sunnah_ingestion():
         title = chap.get("section")
         content = chap.get("content")
         
-        # ---> ADD/UPDATE THIS LINE HERE <---
-        # This explicitly prefixes the title to the chunk so the embedding model knows the context
-        full_chunk = f"موضوع: {title}\n\nمضمون:\n{content}"
+        # Store strictly the clean content text without any prefixes
+        documents.append(content)
         
-        documents.append(full_chunk)
         metadatas.append({
             "section": title,
             "book_title": "Pyarey Nabi ki Pyari Sunnatein"
