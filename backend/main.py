@@ -31,9 +31,9 @@ CHROMA_PATH = str(BACKEND_DIR / "chroma_store")
 
 client = chromadb.PersistentClient(path=CHROMA_PATH)
 
-# Load multilingual sentence transformer model
+# Load BAAI/bge-m3 embedding model to match ingestion
 embed_fn = SentenceTransformerEmbeddingFunction(
-    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+    model_name="BAAI/bge-m3"
 )
 
 # Fetch existing collections
@@ -91,12 +91,10 @@ def health_check():
         "sunnah_collection_count": sunnah_collection.count()
     }
 
-
-
 # ----------------------------------------------------
 # 1. Fatwa Retrieval Endpoint
 # ----------------------------------------------------
-@app.post("/ask/fatwa")
+@app.post("/ask/fatwa") 
 @app.post("/ask")  # Fallback for backward compatibility
 async def ask_fatwa(request: QueryRequest):
     user_query = request.query.strip()
@@ -163,7 +161,7 @@ async def ask_fatwa(request: QueryRequest):
     }
 
 # ----------------------------------------------------
-# 2. Sunnah Retrieval Endpoint (Clean Single Source Mode)
+# 2. Sunnah Retrieval Endpoint
 # ----------------------------------------------------
 @app.post("/ask/sunnah")
 async def ask_sunnah(request: QueryRequest):
@@ -171,8 +169,6 @@ async def ask_sunnah(request: QueryRequest):
     if not user_query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    user_query_lower = user_query.lower()
-   # Keyword to Exact Section Mapping
     target_section = None
     if any(k in user_query for k in ["پانی", "پینے", "پینے کا"]):
         target_section = "پانی پینے کی سنتیں"
@@ -232,35 +228,35 @@ async def ask_sunnah(request: QueryRequest):
         target_section = "صلوٰۃ حاجت"
 
     # --- English Keyword / Intent Mapping ---
-    elif any(k in user_query_lower for k in ["water", "drink", "drinking"]):
+    elif any(k in user_query for k in ["water", "drink", "drinking"]):
         target_section = "پانی پینے کی سنتیں"
-    elif any(k in user_query_lower for k in ["eat", "food", "dining", "meal"]):
+    elif any(k in user_query for k in ["eat", "food", "dining", "meal"]):
         target_section = "کھانے کی چند سنتیں"
-    elif any(k in user_query_lower for k in ["bath", "shower", "ghusl"]):
+    elif any(k in user_query for k in ["bath", "shower", "ghusl"]):
         target_section = "غسل کرنے کا مسنون طریقہ"
-    elif any(k in user_query_lower for k in ["wudu", "ablution"]):
+    elif any(k in user_query for k in ["wudu", "ablution"]):
         target_section = "وضو کی سنتیں"
-    elif any(k in user_query_lower for k in ["sleep", "bed", "sleeping", "night"]):
+    elif any(k in user_query for k in ["sleep", "bed", "sleeping", "night"]):
         target_section = "سونے کی سنتیں"
-    elif any(k in user_query_lower for k in ["namaz", "prayer", "salah", "faraiz", "obligatory"]):
+    elif any(k in user_query for k in ["namaz", "prayer", "salah", "faraiz", "obligatory"]):
         target_section = "فرائض نماز"
-    elif any(k in user_query_lower for k in ["ruku", "bowing"]):
+    elif any(k in user_query for k in ["ruku", "bowing"]):
         target_section = "رکوع کی آٹھ سنتیں"
-    elif any(k in user_query_lower for k in ["sujood", "sajdah", "prostration"]):
+    elif any(k in user_query for k in ["sujood", "sajdah", "prostration"]):
         target_section = "سجدہ کی بارہ سنتیں"
-    elif any(k in user_query_lower for k in ["miswak", "teeth", "tooth"]):
+    elif any(k in user_query for k in ["miswak", "teeth", "tooth"]):
         target_section = "مسواک کی سنتیں"
-    elif any(k in user_query_lower for k in ["marriage", "nikah", "wedding"]):
+    elif any(k in user_query for k in ["marriage", "nikah", "wedding"]):
         target_section = "نکاح کی سنتیں"
-    elif any(k in user_query_lower for k in ["valimah", "reception"]):
+    elif any(k in user_query for k in ["valimah", "reception"]):
         target_section = "ولیمہ"
-    elif any(k in user_query_lower for k in ["sick", "illness", "disease", "hospital", "visiting"]):
+    elif any(k in user_query for k in ["sick", "illness", "disease", "hospital", "visiting"]):
         target_section = "بیماری، علاج اور عیادت کی سنتیں"
-    elif any(k in user_query_lower for k in ["travel", "journey", "trip"]):
+    elif any(k in user_query for k in ["travel", "journey", "trip"]):
         target_section = "سفر کی سنتیں"
-    elif any(k in user_query_lower for k in ["friday", "jummah"]):
+    elif any(k in user_query for k in ["friday", "jummah"]):
         target_section = "جمعہ کی سنتیں"
-    elif any(k in user_query_lower for k in ["clothes", "dress", "clothing", "wear"]):
+    elif any(k in user_query for k in ["clothes", "dress", "clothing", "wear"]):
         target_section = "لباس کی سنتیں"
 
     primary_snippet = ""
@@ -291,7 +287,7 @@ async def ask_sunnah(request: QueryRequest):
             query_embeddings = embed_fn([user_query])
             search_results = sunnah_collection.query(
                 query_embeddings=query_embeddings,
-                n_results=1,  # Only fetch the top 1 exact match
+                n_results=1,
                 include=["documents", "metadatas", "distances"]
             )
             docs = search_results["documents"][0] if search_results.get("documents") else []
@@ -318,7 +314,7 @@ async def ask_sunnah(request: QueryRequest):
 
     return {
         "answer": primary_snippet,
-        "sources": valid_sources  # Will contain strictly 1 exact source card
+        "sources": valid_sources
     }
 
 if __name__ == "__main__":

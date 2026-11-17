@@ -39,7 +39,7 @@ def run_sunnah_ingestion():
     print(f"\n✅ Total distinct sections prepared: {len(documents)}")
 
     embed_fn = SentenceTransformerEmbeddingFunction(
-        model_name="paraphrase-multilingual-MiniLM-L12-v2"
+        model_name="BAAI/bge-m3"
     )
     client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 

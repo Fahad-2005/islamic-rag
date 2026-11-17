@@ -1,4 +1,7 @@
 import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import gc
+import hashlib
 from pathlib import Path
 import pandas as pd
 import chromadb
@@ -8,88 +11,89 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR.parent / "data"
 CHROMA_PATH = BASE_DIR / "chroma_store"
 COLLECTION_NAME = "binoria_toy_fatawa"
-BATCH_SIZE = 64
+BATCH_SIZE = 1  # Ultimate safe batch size for EC2
 
-def load_all_csvs():
-    csv_files = list(DATA_DIR.glob("*.csv"))
-    if not csv_files:
-        raise FileNotFoundError(f"No CSV files found in {DATA_DIR}")
-  
-    dfs = []
-    for file_path in csv_files:
-        print(f"Loading dataset: {file_path.name}")
-        df = pd.read_csv(file_path, encoding="utf-8-sig").fillna("")
-        dfs.append(df)
-
-    combined_df = pd.concat(dfs, ignore_index=True)
-
-    # Filter empty questions or answers
-    combined_df = combined_df[
-        (combined_df["question"].astype(str).str.strip() != "") & 
-        (combined_df["answer"].astype(str).str.strip() != "")
-    ]
-
-    # Remove duplicates if same question exists across files
-    combined_df = combined_df.drop_duplicates(subset=["question"]).reset_index(drop=True)
-    
-    print(f"Total combined unique records to index: {len(combined_df)}")
-    return combined_df
+# ... (keep your load_all_csvs function the same) ...
 
 def run_ingestion():
     df = load_all_csvs()
 
-    # Align model with main.py (Multilingual MiniLM L12)
+    print("Initializing BAAI/bge-m3 embedding function...")
     embed_fn = SentenceTransformerEmbeddingFunction(
-        model_name="paraphrase-multilingual-MiniLM-L12-v2"
+        model_name="BAAI/bge-m3"
     )
 
     client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 
-    try:
-        print(f"Resetting collection: {COLLECTION_NAME}")
-        client.delete_collection(name=COLLECTION_NAME)
-    except Exception:
-        pass
-
-    collection = client.create_collection(
+    collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=embed_fn,
         metadata={"hnsw:space": "cosine"},
     )
+
+    existing_data = collection.get(include=["metadatas"])
+    existing_questions = set()
+    if existing_data and "metadatas" in existing_data and existing_data["metadatas"]:
+        for meta in existing_data["metadatas"]:
+            if meta and "question" in meta:
+                existing_questions.add(meta["question"].strip())
+
+    print(f"Already successfully ingested unique questions in DB: {len(existing_questions)}")
 
     documents = []
     metadatas = []
     ids = []
 
     for index, row in df.iterrows():
-        fatwa_id = str(row.get("fatwa_number", index)).strip()
         question = str(row["question"]).strip()
+        
+        if question[:200] in existing_questions:
+            continue
+
+        fatwa_id = str(row.get("fatwa_number", index)).strip()
         answer = str(row["answer"]).strip()
         category = str(row.get("category", "عام")).strip()
+        sub_category = str(row.get("sub_category", "متفرق")).strip()
+        url = str(row.get("url", "")).strip()
+        source_origin = str(row.get("source_origin", "مستند فتاویٰ")).strip()
 
-        # Structured document format to give strong semantic signals to MiniLM
+        unique_string = f"{fatwa_id}_{question}"
+        hash_id = hashlib.md5(unique_string.encode('utf-8')).hexdigest()
+        doc_id = f"fatwa_{hash_id}"
+
         doc_text = f"زمرہ: {category}\nسوال: {question}\nجواب: {answer}"
 
         documents.append(doc_text)
         metadatas.append({
             "fatwa_number": fatwa_id,
             "category": category,
-            "sub_category": str(row.get("sub_category", "متفرق")),
+            "sub_category": sub_category,
             "question": question[:200],
-            "url": str(row.get("url", "")),
+            "url": url,
+            "source_origin": source_origin,
         })
-        ids.append(f"fatwa_{fatwa_id}_{index}")
+        ids.append(doc_id)
 
-    total_batches = (len(documents) + BATCH_SIZE - 1) // BATCH_SIZE
-    for start in range(0, len(documents), BATCH_SIZE):
+    print(f"Remaining records left to ingest: {len(documents)}")
+
+    if len(documents) == 0:
+        print("All records are already fully ingested!")
+        return
+
+    total_items = len(documents)
+    for i, (doc, meta, doc_id) in enumerate(zip(documents, metadatas, ids)):
         collection.add(
-            documents=documents[start:start + BATCH_SIZE],
-            metadatas=metadatas[start:start + BATCH_SIZE],
-            ids=ids[start:start + BATCH_SIZE],
+            documents=[doc],
+            metadatas=[meta],
+            ids=[doc_id],
         )
-        print(f"Indexed batch {start // BATCH_SIZE + 1} / {total_batches}")
+        
+        gc.collect()
 
-    print(f"Ingestion complete! Successfully indexed {collection.count()} documents into {CHROMA_PATH}")
+        if (i + 1) % 50 == 0 or (i + 1) == total_items:
+            print(f"Progress: {i + 1} / {total_items} remaining records processed")
+
+    print(f"Ingestion complete! Total records in collection now: {collection.count()}")
 
 if __name__ == "__main__":
     run_ingestion()
